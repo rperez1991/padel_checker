@@ -12,38 +12,59 @@ const COURTS_1900 = [20, 21, 22];  // pistas 10, 11, 12 → 19:00
 
 // ── Helpers de cookies ────────────────────────────────────────────────────────
 
+function extractSetCookies(headers) {
+  // getSetCookie() es Node 18.14+ / undici; fallback a get() para entornos más viejos
+  if (typeof headers.getSetCookie === "function") {
+    return headers.getSetCookie();
+  }
+  const raw = headers.get("set-cookie");
+  return raw ? raw.split(/,(?=[^ ])/) : [];
+}
+
 function parseCookies(headers) {
-  const raw = headers.getSetCookie?.() ?? [];
-  return raw.map(c => c.split(";")[0]).join("; ");
+  return extractSetCookies(headers)
+    .map(c => c.split(";")[0].trim())
+    .filter(Boolean)
+    .join("; ");
 }
 
 function mergeCookies(existing, incoming) {
   if (!incoming) return existing;
-  const map = Object.fromEntries(
-    existing.split(";").filter(Boolean).map(p => {
-      const [k, ...v] = p.trim().split("=");
-      return [k, v.join("=")];
-    })
-  );
-  incoming.split(";").filter(Boolean).forEach(p => {
-    const [k, ...v] = p.trim().split("=");
-    map[k] = v.join("=");
-  });
+  const map = {};
+  for (const part of (existing + "; " + incoming).split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) continue;
+    map[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
+  }
   return Object.entries(map).map(([k, v]) => `${k}=${v}`).join("; ");
+}
+
+// GET que sigue redirecciones manualmente acumulando cookies
+async function getFollowing(url, cookies) {
+  let current = url;
+  for (let i = 0; i < 5; i++) {
+    const res = await fetch(current, {
+      headers: { "User-Agent": UA, Cookie: cookies },
+      redirect: "manual",
+    });
+    cookies = mergeCookies(cookies, parseCookies(res.headers));
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      current = loc.startsWith("http") ? loc : `${BASE}${loc}`;
+    } else {
+      return { res, cookies, text: await res.text() };
+    }
+  }
+  throw new Error("Demasiadas redirecciones");
 }
 
 // ── Lógica principal ──────────────────────────────────────────────────────────
 
 async function fetchAvailable() {
-  let cookies = "";
-
-  // 1. Home → CSRF + cookies de sesión
-  const homeRes = await fetch(`${BASE}/`, {
-    headers: { "User-Agent": UA },
-    redirect: "follow",
-  });
-  cookies = mergeCookies(cookies, parseCookies(homeRes.headers));
-  const homeHtml = await homeRes.text();
+  // 1. Home → CSRF + cookies iniciales
+  const { text: homeHtml, cookies: c1 } = await getFollowing(`${BASE}/`, "");
 
   const csrfMatch =
     homeHtml.match(/name=['"]_csrf['"][^>]+value=['"]([^'"]+)['"]/) ||
@@ -51,26 +72,38 @@ async function fetchAvailable() {
     homeHtml.match(/"_csrf"\s*:\s*"([^"]{8,})"/);
   const csrf = csrfMatch?.[1] ?? "";
 
-  // 2. Login
+  // 2. Login POST → seguir redirect acumulando cookies
   const loginBody = new URLSearchParams({
     _csrf:       csrf,
     request_url: "",
     login:       LOGIN,
     password:    PASSWD,
   });
-  const loginRes = await fetch(`${BASE}/session/create`, {
-    method:   "POST",
-    headers:  {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Origin":       BASE,
-      "Referer":      `${BASE}/`,
-      "User-Agent":   UA,
-      "Cookie":       cookies,
-    },
-    body:     loginBody.toString(),
-    redirect: "manual",
-  });
-  cookies = mergeCookies(cookies, parseCookies(loginRes.headers));
+
+  let cookies = c1;
+  let current = `${BASE}/session/create`;
+  for (let i = 0; i < 5; i++) {
+    const isFirst = i === 0;
+    const res = await fetch(current, {
+      method:  isFirst ? "POST" : "GET",
+      headers: {
+        ...(isFirst ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
+        "Origin":   BASE,
+        "Referer":  `${BASE}/`,
+        "User-Agent": UA,
+        "Cookie":   cookies,
+      },
+      body:     isFirst ? loginBody.toString() : undefined,
+      redirect: "manual",
+    });
+    cookies = mergeCookies(cookies, parseCookies(res.headers));
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      current = loc.startsWith("http") ? loc : `${BASE}${loc}`;
+    } else {
+      break;
+    }
+  }
 
   // 3. Consulta reservas (ventana 7 días)
   const today = new Date().toISOString().slice(0, 10);
@@ -79,7 +112,7 @@ async function fetchAvailable() {
     `${BASE}/reservas/dia?dia=${today}&pistas=padel&days_forward=7&days_back=0&_=${ts}`,
     {
       headers: {
-        "Accept":           "*/*",
+        "Accept":           "application/json, text/javascript, */*",
         "X-Requested-With": "XMLHttpRequest",
         "Referer":          `${BASE}/reservas/padel`,
         "User-Agent":       UA,
@@ -87,6 +120,12 @@ async function fetchAvailable() {
       },
     }
   );
+
+  const contentType = apiRes.headers.get("content-type") ?? "";
+  if (!contentType.includes("json")) {
+    const body = await apiRes.text();
+    throw new Error(`La API devolvió ${apiRes.status} no-JSON: ${body.slice(0, 200)}`);
+  }
   const reservas = await apiRes.json();
 
   // 4. Set de ocupadas para búsqueda O(1)
