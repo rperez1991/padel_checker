@@ -168,6 +168,25 @@ async function fetchAvailable() {
   };
 }
 
+// ── Telegram ──────────────────────────────────────────────────────────────────
+
+async function sendTelegram(disponibles) {
+  const token  = process.env.TELEGRAM_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) return;
+
+  const lineas = disponibles.map(d =>
+    `• ${d.dia} ${d.fecha} — ${d.hora} — Pista ${d.pista}`
+  );
+  const text = `🎾 Pistas disponibles:\n\n${lineas.join("\n")}`;
+
+  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ chat_id: chatId, text }),
+  });
+}
+
 // ── Handler Vercel ─────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
@@ -176,6 +195,7 @@ export default async function handler(req, res) {
   }
   try {
     const data = await fetchAvailable();
+    if (data.total > 0) await sendTelegram(data.disponibles);
     res.status(200).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
