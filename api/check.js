@@ -145,16 +145,19 @@ async function fetchAvailable() {
     }
   }
 
+  const DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+
   // 6. Huecos disponibles
   const disponibles = [];
   for (const fecha of fechas) {
+    const diaSemana = DIAS[new Date(fecha + "T12:00:00").getDay()];
     for (const pista of COURTS_1830) {
       if (!ocupadas.has(`${pista}|${fecha} 18:30`))
-        disponibles.push({ fecha, hora: "18:30", pista });
+        disponibles.push({ fecha, dia: diaSemana, hora: "18:30", pista: pista - 10 });
     }
     for (const pista of COURTS_1900) {
       if (!ocupadas.has(`${pista}|${fecha} 19:00`))
-        disponibles.push({ fecha, hora: "19:00", pista });
+        disponibles.push({ fecha, dia: diaSemana, hora: "19:00", pista: pista - 10 });
     }
   }
 
