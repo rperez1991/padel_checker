@@ -147,9 +147,13 @@ async function fetchAvailable() {
 
   const DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
+  // Fechas excluidas manualmente
+  const FECHAS_EXCLUIDAS = new Set(["2026-04-02", "2026-04-03"]);
+
   // 6. Huecos disponibles
   const disponibles = [];
   for (const fecha of fechas) {
+    if (FECHAS_EXCLUIDAS.has(fecha)) continue;
     const diaSemana = DIAS[new Date(fecha + "T12:00:00").getDay()];
     for (const pista of COURTS_1830) {
       if (!ocupadas.has(`${pista}|${fecha} 18:30`))
