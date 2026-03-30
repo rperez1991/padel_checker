@@ -1,6 +1,8 @@
 // api/check.js — Vercel serverless function
 // GET /api/check  →  JSON con huecos disponibles lunes-jueves en 18:30 y 19:00
 
+import { put, head, del } from "@vercel/blob";
+
 const BASE   = "https://reservas.fundacioncrcantabria.es";
 const LOGIN  = process.env.PADEL_LOGIN;
 const PASSWD = process.env.PADEL_PASSWD;
@@ -148,7 +150,7 @@ async function fetchAvailable() {
   const DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
   // Fechas excluidas manualmente
-  const FECHAS_EXCLUIDAS = new Set(["2026-04-02", "2026-04-03"]);
+  const FECHAS_EXCLUIDAS = new Set(["2026-04-02", "2026-04-03", "2026-04-06"]);
 
   // 6. Huecos disponibles
   const disponibles = [];
@@ -170,6 +172,36 @@ async function fetchAvailable() {
     disponibles,
     total:       disponibles.length,
   };
+}
+
+// ── Deduplicación via Vercel Blob ─────────────────────────────────────────────
+
+const BLOB_KEY = "notificados.json";
+
+async function loadNotificados() {
+  try {
+    const info = await head(BLOB_KEY);
+    const res  = await fetch(info.url);
+    return await res.json();   // { "2026-04-07|18:30|7": true, ... }
+  } catch {
+    return {};
+  }
+}
+
+async function saveNotificados(notificados) {
+  await put(BLOB_KEY, JSON.stringify(notificados), {
+    access:      "public",
+    contentType: "application/json",
+    addRandomSuffix: false,
+  });
+}
+
+// Elimina entradas de fechas pasadas para no acumular indefinidamente
+function limpiarNotificados(notificados) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  return Object.fromEntries(
+    Object.entries(notificados).filter(([k]) => k.slice(0, 10) >= hoy)
+  );
 }
 
 // ── Telegram ──────────────────────────────────────────────────────────────────
@@ -199,7 +231,24 @@ export default async function handler(req, res) {
   }
   try {
     const data = await fetchAvailable();
-    if (data.total > 0) await sendTelegram(data.disponibles);
+
+    if (data.total > 0) {
+      let notificados = limpiarNotificados(await loadNotificados());
+
+      const nuevos = data.disponibles.filter(d => {
+        const key = `${d.fecha}|${d.hora}|${d.pista}`;
+        return !notificados[key];
+      });
+
+      if (nuevos.length > 0) {
+        await sendTelegram(nuevos);
+        for (const d of nuevos) {
+          notificados[`${d.fecha}|${d.hora}|${d.pista}`] = true;
+        }
+        await saveNotificados(notificados);
+      }
+    }
+
     res.status(200).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
