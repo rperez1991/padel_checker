@@ -1,6 +1,6 @@
 // api/_lib/padel.js — lógica compartida (no expuesta como ruta por el prefijo _)
 
-import { put, head, download } from "@vercel/blob";
+import { put, head } from "@vercel/blob";
 
 const BASE   = "https://reservas.fundacioncrcantabria.es";
 const LOGIN  = process.env.PADEL_LOGIN;
@@ -178,7 +178,9 @@ const BLOB_KEY = "notificados.json";
 export async function loadNotificados() {
   try {
     const info = await head(BLOB_KEY);
-    const res  = await download(info.url);
+    const res  = await fetch(info.url, {
+      headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
+    });
     return await res.json();   // { "2026-04-07|18:30|7": true, ... }
   } catch {
     return {};
