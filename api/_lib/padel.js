@@ -1,7 +1,6 @@
-// api/check.js — Vercel serverless function
-// GET /api/check  →  JSON con huecos disponibles lunes-jueves en 18:30 y 19:00
+// api/_lib/padel.js — lógica compartida (no expuesta como ruta por el prefijo _)
 
-import { put, head, del } from "@vercel/blob";
+import { put, head, download } from "@vercel/blob";
 
 const BASE   = "https://reservas.fundacioncrcantabria.es";
 const LOGIN  = process.env.PADEL_LOGIN;
@@ -15,7 +14,6 @@ const COURTS_1900 = [20, 21, 22];  // pistas 10, 11, 12 → 19:00
 // ── Helpers de cookies ────────────────────────────────────────────────────────
 
 function extractSetCookies(headers) {
-  // getSetCookie() es Node 18.14+ / undici; fallback a get() para entornos más viejos
   if (typeof headers.getSetCookie === "function") {
     return headers.getSetCookie();
   }
@@ -43,7 +41,6 @@ function mergeCookies(existing, incoming) {
   return Object.entries(map).map(([k, v]) => `${k}=${v}`).join("; ");
 }
 
-// GET que sigue redirecciones manualmente acumulando cookies
 async function getFollowing(url, cookies) {
   let current = url;
   for (let i = 0; i < 5; i++) {
@@ -64,7 +61,7 @@ async function getFollowing(url, cookies) {
 
 // ── Lógica principal ──────────────────────────────────────────────────────────
 
-async function fetchAvailable() {
+export async function fetchAvailable() {
   // 1. Home → CSRF + cookies iniciales
   const { text: homeHtml, cookies: c1 } = await getFollowing(`${BASE}/`, "");
 
@@ -90,10 +87,10 @@ async function fetchAvailable() {
       method:  isFirst ? "POST" : "GET",
       headers: {
         ...(isFirst ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
-        "Origin":   BASE,
-        "Referer":  `${BASE}/`,
+        "Origin":     BASE,
+        "Referer":    `${BASE}/`,
         "User-Agent": UA,
-        "Cookie":   cookies,
+        "Cookie":     cookies,
       },
       body:     isFirst ? loginBody.toString() : undefined,
       redirect: "manual",
@@ -178,26 +175,25 @@ async function fetchAvailable() {
 
 const BLOB_KEY = "notificados.json";
 
-async function loadNotificados() {
+export async function loadNotificados() {
   try {
     const info = await head(BLOB_KEY);
-    const res  = await fetch(info.url);
+    const res  = await download(info.url);
     return await res.json();   // { "2026-04-07|18:30|7": true, ... }
   } catch {
     return {};
   }
 }
 
-async function saveNotificados(notificados) {
+export async function saveNotificados(notificados) {
   await put(BLOB_KEY, JSON.stringify(notificados), {
-    access:      "public",
-    contentType: "application/json",
+    access:          "private",
+    contentType:     "application/json",
     addRandomSuffix: false,
   });
 }
 
-// Elimina entradas de fechas pasadas para no acumular indefinidamente
-function limpiarNotificados(notificados) {
+export function limpiarNotificados(notificados) {
   const hoy = new Date().toISOString().slice(0, 10);
   return Object.fromEntries(
     Object.entries(notificados).filter(([k]) => k.slice(0, 10) >= hoy)
@@ -206,7 +202,7 @@ function limpiarNotificados(notificados) {
 
 // ── Telegram ──────────────────────────────────────────────────────────────────
 
-async function sendTelegram(disponibles) {
+export async function sendTelegram(disponibles) {
   const token  = process.env.TELEGRAM_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) return;
@@ -221,36 +217,4 @@ async function sendTelegram(disponibles) {
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({ chat_id: chatId, text }),
   });
-}
-
-// ── Handler Vercel ─────────────────────────────────────────────────────────────
-
-export default async function handler(req, res) {
-  if (req.method !== "GET") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-  try {
-    const data = await fetchAvailable();
-
-    if (data.total > 0) {
-      let notificados = limpiarNotificados(await loadNotificados());
-
-      const nuevos = data.disponibles.filter(d => {
-        const key = `${d.fecha}|${d.hora}|${d.pista}`;
-        return !notificados[key];
-      });
-
-      if (nuevos.length > 0) {
-        await sendTelegram(nuevos);
-        for (const d of nuevos) {
-          notificados[`${d.fecha}|${d.hora}|${d.pista}`] = true;
-        }
-        await saveNotificados(notificados);
-      }
-    }
-
-    res.status(200).json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 }
