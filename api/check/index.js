@@ -25,7 +25,7 @@ export default async function handler(req, res) {
       });
 
       if (nuevos.length > 0) {
-        // await sendTelegram(nuevos);
+        await sendTelegram(nuevos);
         for (const d of nuevos) {
           notificados[`${d.fecha}|${d.hora}|${d.pista}`] = true;
         }
