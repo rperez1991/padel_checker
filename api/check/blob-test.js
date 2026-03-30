@@ -12,16 +12,14 @@ export default async function handler(req, res) {
 
     // Escribir
     const result = await put("notificados.json", JSON.stringify(testData), {
-      access:          "private",
+      access:          "public",
       contentType:     "application/json",
       addRandomSuffix: false,
     });
 
     // Leer de vuelta
     const info = await head("notificados.json");
-    const readRes = await fetch(info.url, {
-      headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-    });
+    const readRes = await fetch(info.url);
     const readData = await readRes.json();
 
     res.status(200).json({ written: result, read: readData });

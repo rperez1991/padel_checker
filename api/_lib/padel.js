@@ -178,9 +178,7 @@ const BLOB_KEY = "notificados.json";
 export async function loadNotificados() {
   try {
     const info = await head(BLOB_KEY);
-    const res  = await fetch(info.url, {
-      headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-    });
+    const res  = await fetch(info.url);
     return await res.json();   // { "2026-04-07|18:30|7": true, ... }
   } catch {
     return {};
@@ -189,7 +187,7 @@ export async function loadNotificados() {
 
 export async function saveNotificados(notificados) {
   await put(BLOB_KEY, JSON.stringify(notificados), {
-    access:          "private",
+    access:          "public",
     contentType:     "application/json",
     addRandomSuffix: false,
   });
